@@ -1,0 +1,7 @@
+python3
+WebSocketclient
+sqlalchemy
+python-binance
+btfxwss
+fcoin
+apscheduler
