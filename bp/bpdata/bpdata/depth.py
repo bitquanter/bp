@@ -9,8 +9,11 @@ import time
 import logging
 import json
 import requests
-from ref.client import Client
-from ref.depthcache import DepthCacheManager
+import websocket
+import threading
+from binance.client import Client
+from binance.depthcache import DepthCacheManager
+# from binance.websockets import BinanceSocketManager
 from config import get_config
 from redis_store import RedisStore
 
@@ -118,14 +121,13 @@ def _okex_depth():
 
 
 def binance_depth():
-    _binance_depth()
-    # while True:
-    #     try:
-    #         print('start binance depth')
-    #         _binance_depth()
-    #     except:
-    #         print('binance retry...')
-    # pass
+    while True:
+        try:
+            print('start binance depth')
+            _binance_depth_onetoken()
+        except:
+            print('binance retry...')
+    pass
 
 
 def _binance_depth():
@@ -136,12 +138,17 @@ def _binance_depth():
         for i in sym_dic[k]:
             tradeStr = '%s%s'%(i,k)
             symbols.append(tradeStr.upper())
+    # bm = BinanceSocketManager(client)
     for sym in symbols:
-        dcm = DepthCacheManager(client, sym, callback=binance_depth_callback)
+        dcm = DepthCacheManager(client, sym, callback=_on_binance_depth)
+    #     partial_key = bm.start_depth_socket('BNBBTC', binance_depth_callback, depth=BinanceSocketManager.WEBSOCKET_DEPTH_5)
+    # bm.start()
     pass
 
 
-def binance_depth_callback(data):
+def _on_binance_depth(data):
+    # print('callback')
+    # print(data)
     if data:
         key = 'tick/%s/%s'%('binance',data.symbol.lower())
         item = {}
@@ -150,6 +157,31 @@ def binance_depth_callback(data):
         item['timestamp'] = time.time()
         print(key)
         store.set(key, json.dumps(item))
+    pass
+
+
+def _binance_depth_onetoken():
+    currency_list = []
+    sym_dic = cfg.get_symbols('binance')
+    symbols = []
+    for k in sym_dic:
+        for i in sym_dic[k]:
+            tradeStr = 'binance/%s.%s'%(i,k)
+            currency_list.append(tradeStr)
+    ws = create_connection("wss://1token.trade/api/v1/ws/tick")
+    auth_data = {"uri": "auth"}
+    ws.send(json.dumps(auth_data))
+    for cur in currency_list:
+        request_data = {"uri": "subscribe-single-tick-verbose", "contract": cur}
+        ws.send(json.dumps(request_data))
+    while True:
+        data = ws.recv()
+        json_data = json.loads(data)
+        if 'data' in json_data:
+            currency = json_data['data']['contract']
+            key = 'tick/%s'%(currency.replace('.',''))
+            value = json.dumps(json_data['data'])
+            store.set(key, value)
     pass
 
 
@@ -164,10 +196,7 @@ def bitfinex_depth():
 
 def _bitfinex_depth():
     # 连接bitfinex行情
-    wss = BtfxWss()
-    wss.start()
-    while not wss.conn.connected.is_set():
-        time.sleep(1)
+    ws = create_connection("wss://api.bitfinex.com/ws/2")
     sym_dic = cfg.get_symbols('bitfinex')
     symbols = []
     for k in sym_dic:
@@ -175,20 +204,26 @@ def _bitfinex_depth():
             tradeStr = '%s%s'%(i,k)
             symbols.append(tradeStr.upper())
     print(len(symbols))
-    for sym in symbols:
-        wss.subscribe_to_order_book(sym)
-
-    while (1):
-        for sym in symbols:
-            sym_q = wss.books(sym)
-            if not sym_q.empty():
-                key = 'tick/%s/%s'%('bitfinex', sym.lower())
-                data = sym_q.get()
-                item = {}
-                item['data'] = data[0]
-                item['ts'] = data[1]
-                store.set(key, json.dumps(item))
-    wss.stop()
+    for symbol in symbols:
+        item = {}
+        item['event'] = 'subscribe'
+        item['channel'] = 'trades'
+        item['symbol'] = symbol
+        sub_str = json.dumps(item)
+        ws.send(sub_str)
+    id_map = {}
+    while(1):
+        result=ws.recv()
+        if 'event' in result:
+            res = json.loads(result)
+            if res['event'] == 'subscribed':
+                id_map[res['chanId']] = res['pair']
+        elif 'hb' not in result:
+            res = json.loads(result)
+            ch_id = res[0]
+            if ch_id in id_map:
+                key = 'tick/bitfinex/%s'%(id_map[ch_id].lower())
+                store.set(key, result)
     pass
 
 
@@ -315,53 +350,25 @@ def fcoin_depth():
 
 
 def _fcoin_depth():
-    # 连接fcoin交易所websocket行情
-    # import fcoin
-    # fcoin_ws = fcoin.init_ws()
-    # sym_dic = cfg.get_symbols('fcoin')
-    # topics = []
-    # for k in sym_dic:
-    #     for i in sym_dic[k]:
-    #         tradeStr = 'depth.L20.%s%s'%(i,k)
-    #         topics.append(tradeStr)
-    # fcoin_ws.handle(fcoin_depth_callback)
-    # fcoin_ws.sub(topics)
-
-
-
-    # while(1):
-    #     try:
-    #         ws = create_connection("wss://api.fcoin.com/v2/ws")
-    #         break
-    #     except:
-    #         print('connect ws error,retry...')
-    #         time.sleep(5)
-
-    # sym_dic = cfg.get_symbols('fcoin')
-    # symbols = []
-    # for k in sym_dic:
-    #     for i in sym_dic[k]:
-    #         tradeStr = '%s%s'%(i,k)
-    #         symbols.append(tradeStr)
-    # # for symbol in symbols:
-    # #     sub_str = 'depth.L20.%s'%(symbol)
-    # #     ws.send(sub_str)
-    # item = {}
-    # item['topic'] = 'depth.L20.%s'%('btcusdt')
-    # sub_str = 'depth.L20.%s'%('btcusdt') # json.dumps(item)
-    # ws.send(sub_str)
-    # while(1):
-    #     result=ws.recv()
-    #     print(result)
-    #     print('=========================')
-    pass
-
-
-def fcoin_depth_callback(data):
-    print(data)
-    # json_data = json.loads(data)
-    # key = 'tick/fcoin/%s'%(json_data['type'].split('.')[2])
-    # store.set(key, data)
+    ws = create_connection("wss://api.fcoin.com/v2/ws")
+    sym_dic = cfg.get_symbols('fcoin')
+    symbols = []
+    for k in sym_dic:
+        for i in sym_dic[k]:
+            tradeStr = 'depth.L20.%s%s'%(i,k)
+            symbols.append(tradeStr)
+    item = {}
+    item['cmd'] = 'sub'
+    item['id'] = '2'
+    item['args'] = symbols
+    sub_str = json.dumps(item)
+    ws.send(sub_str)
+    while(1):
+        result=ws.recv()
+        json_res = json.loads(result)
+        if 'depth' in json_res['type']:
+            key = 'tick/fcoin/%s'%(json_res['type'].split('.')[2])
+            store.set(key, result)
     pass
 
 
@@ -376,23 +383,51 @@ def binmex_depth():
 
 def _binmex_depth():
     # 链接 binmex ws
-    ws = create_connection("wss://www.bitmex.com/realtime")
-    item = {}
-    item['op'] = 'subscribe'
-    item['args'] = []
+    #ws = create_connection("wss://www.bitmex.com/realtime")
     sym_dic = cfg.get_symbols('binmex')
+    symbols = []
     for k in sym_dic:
         for i in sym_dic[k]:
-            tradeStr = 'orderBook10:%s%s'%(i.upper(),k.upper())
-            item['args'].append(tradeStr)
-    sub_str = json.dumps(item)
-    ws.send(sub_str)
-    while(1):
-        result=ws.recv()
-        json_res = json.loads(result)
-        if 'data' in json_res and len(json_res['data']) > 0:
-            key = 'tick/binmex/%s'%(json_res['data'][0]['symbol'].lower())
-            store.set(key, json.dumps(json_res['data'][0]))
+            tradeStr = '%s%s'%(i,k)
+            symbols.append(tradeStr.upper())
+    print(len(symbols))
+    for symbol in symbols:
+        subscriptions = "orderBookL2:" + symbol.upper()
+        url = 'wss://www.bitmex.com/realtime?subscribe={}'.format(subscriptions)
+        ws = websocket.WebSocketApp(url, on_message=_on_binmex)
+        wst = threading.Thread(target=lambda: ws.run_forever())
+        wst.daemon = True
+        wst.start()
+        conn_timeout = 5
+        while not ws.sock or not ws.sock.connected and conn_timeout:
+            time.sleep(1)
+            conn_timeout -= 1
+        if not conn_timeout:
+            ws.close()
+    while True:
+        time.sleep(0.1)
+    pass
+
+
+def _on_binmex(ws, msg):
+    msg = json.loads(msg)
+    print(msg)
+    pass
+
+
+def _binmex_depth_restful():
+    sym_dic = cfg.get_symbols('binmex')
+    symbols = []
+    for k in sym_dic:
+        for i in sym_dic[k]:
+            tradeStr = '%s%s'%(i, k)
+            symbols.append(tradeStr.upper())
+    while True:
+        for sym in symbols:
+            url = 'https://www.bitmex.com/api/v1/orderBook/L2?symbol=%s&depth=25'%(sym)
+            response = requests.request("GET", url)
+            print(response.text)
+            print('=======================')
     pass
 
 

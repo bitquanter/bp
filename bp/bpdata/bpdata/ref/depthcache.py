@@ -180,17 +180,13 @@ class DepthCacheManager(object):
 
         :return:
         """
-        print('1111111111111111')
         self._bm = BinanceSocketManager(self._client)
-        print('2222222222222222222222222')
         self._bm.start_depth_socket(self._symbol, self._depth_event)
-        print('333333333333333333333333')
         self._bm.start()
-        print('444444444444444444444444444')
         # wait for some socket responses
-        while not len(self._depth_message_buffer):
-            print(len(self._depth_message_buffer))
-            time.sleep(1)
+        # while not len(self._depth_message_buffer):
+        #     print(len(self._depth_message_buffer))
+        #     time.sleep(1)
 
     def _depth_event(self, msg):
         """Handle a depth event
